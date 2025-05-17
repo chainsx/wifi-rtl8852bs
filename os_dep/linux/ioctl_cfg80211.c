@@ -235,7 +235,8 @@ u8 rtw_cfg80211_ch_switch_notify(_adapter *adapter,
 #endif
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
-	struct cfg80211_chan_def chdef;
+	struct cfg80211_chan_def chdef = {};
+	
 	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(CONFIG_MLD_KERNEL_PATCH)
 	u16 punct_bitmap = 0; /*TBD*/
 	#endif
@@ -244,51 +245,17 @@ u8 rtw_cfg80211_ch_switch_notify(_adapter *adapter,
 	if (ret != _SUCCESS)
 		goto exit;
 
-	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0))
-	if (started) {
-		mutex_lock(&wdev->mtx);
-		__acquire(&wdev->mtx);
-		#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0))
-		cfg80211_ch_switch_started_notify(adapter->pnetdev, &chdef, link_id, 0, false);
-		#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(CONFIG_MLD_KERNEL_PATCH)
-		cfg80211_ch_switch_started_notify(adapter->pnetdev, &chdef, link_id, 0, false, punct_bitmap);
-		#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
-		cfg80211_ch_switch_started_notify(adapter->pnetdev, &chdef, link_id, 0, false);
-		#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0))
-		/* --- cfg80211_ch_switch_started_notfiy() ---
-		 *  A new parameter, bool quiet, is added from Linux kernel v5.11,
-		 *  to see if block-tx was requested by the AP. since currently,
-		 *  the API is used for station before connected in rtw_chk_start_clnt_join()
-		 *  the quiet is set to false here first. May need to refine it if
-		 *  called by others with block-tx.
-		 */
-		cfg80211_ch_switch_started_notify(adapter->pnetdev, &chdef, 0, false);
-		#else
-		cfg80211_ch_switch_started_notify(adapter->pnetdev, &chdef, 0);
-		#endif
-		__release(&wdev->mtx);
-		mutex_unlock(&wdev->mtx);
-		goto exit;
-	}
-	#endif
-
 	if (!rtw_cfg80211_allow_ch_switch_notify(adapter))
 		goto exit;
 
-	mutex_lock(&wdev->mtx);
-	__acquire(&wdev->mtx);
-	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0))
+	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,3, 0)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)) && !defined(BUILD_OPENWRT)
 	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, link_id);
-	#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(CONFIG_MLD_KERNEL_PATCH)
-	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, link_id, punct_bitmap);
-	#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 2))
+	#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5,19, 2)) || defined(BUILD_OPENWRT)
 	/* ToDo CONFIG_RTW_MLD */
 	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, link_id);
 	#else
 	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
 	#endif
-	__release(&wdev->mtx);
-	mutex_unlock(&wdev->mtx);
 
 #else
 	int freq = rtw_bch2freq(rtw_chdef->band, rtw_chdef->chan);
@@ -5728,45 +5695,23 @@ static int rtw_cfg80211_set_beacon_ies(struct net_device *net, const u8 *head,
 	return ret;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)) || defined(BUILD_OPENWRT)
 static int cfg80211_rtw_change_beacon(struct wiphy *wiphy, struct net_device *ndev,
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0))
-				      struct cfg80211_ap_update *param
-#else
-				      struct cfg80211_beacon_data *param
-#endif
-)
-
+		struct cfg80211_ap_update *params)
 {
+		struct cfg80211_beacon_data *info = &params->beacon;
+#else
+static int cfg80211_rtw_change_beacon(struct wiphy *wiphy, struct net_device *ndev,
+		struct cfg80211_beacon_data *info)
+{
+#endif
 	int ret = 0;
 	_adapter *adapter = (_adapter *)rtw_netdev_priv(ndev);
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0))
-	struct cfg80211_beacon_data *info = &param->beacon;
-#else
-	struct cfg80211_beacon_data *info = param;
-#endif
 
 	RTW_INFO(FUNC_NDEV_FMT"\n", FUNC_NDEV_ARG(ndev));
 
-#ifdef not_yet
-	/*
-	 * @proberesp_ies: extra information element(s) to add into Probe Response
-	 *	frames or %NULL
-	 * @proberesp_ies_len: length of proberesp_ies in octets
-	 */
-	if (info->proberesp_ies_len > 0)
-		rtw_cfg80211_set_proberesp_ies(ndev, info->proberesp_ies, info->proberesp_ies_len);
-#endif /* not_yet */
+	ret = rtw_add_beacon(adapter, info->head, info->head_len, info->tail, info->tail_len);
 
-	if (info->assocresp_ies_len > 0)
-		rtw_cfg80211_set_assocresp_ies(ndev, info->assocresp_ies, info->assocresp_ies_len);
-
-	if (rtw_cfg80211_check_beacon_ies(ndev, info->head, info->head_len,
-					  info->tail, info->tail_len) != 0) {
-		ret = rtw_add_beacon(adapter, info->head, info->head_len,
-				     info->tail, info->tail_len);
-		rtw_cfg80211_set_beacon_ies(ndev, info->head, info->head_len,
-					    info->tail, info->tail_len);
-	}
 	return ret;
 }
 
@@ -6738,13 +6683,16 @@ static void rtw_get_chbwoff_from_cfg80211_chan_def(
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)) */
 
 static int cfg80211_rtw_set_monitor_channel(struct wiphy *wiphy
+#ifdef BUILD_OPENWRT
+	, struct net_device *dev
+#endif
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
 	, struct cfg80211_chan_def *chandef
 #else
 	, struct ieee80211_channel *chan
 	, enum nl80211_channel_type channel_type
 #endif
-	)
+)
 {
 	_adapter *padapter = wiphy_to_adapter(wiphy);
 	struct rtw_chan_def target_chdef = {0};
