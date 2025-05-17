@@ -1,0 +1,1 @@
+savedcmd_drivers/net/wireless/realtek/rtl8852bs/8852bs.o := riscv64-openwrt-linux-musl-ld -melf64lriscv -z noexecstack --no-warn-rwx-segments --strip-debug  -r -o drivers/net/wireless/realtek/rtl8852bs/8852bs.o @drivers/net/wireless/realtek/rtl8852bs/8852bs.mod 
